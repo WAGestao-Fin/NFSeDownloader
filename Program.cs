@@ -25,16 +25,16 @@ namespace NFSeDownloader
             Console.WriteLine("╚════════════════════════════════════════════════════════╝\n");
 
             // ===== CONFIGURAÇÕES =====
-            // IMPORTANTE: Use HTTPS em vez de HTTP
             const string BaseUrl = "https://sefin.nfse.gov.br/SefinNacional";
             const string CertPath = @"C:\certificados\certificado.pfx";
             const string CertPassword = "sua_senha";
             const string OutputFolder = @".\NFSe_Downloads";
             
-            // Chave para teste
+            // Exemplo: coloque aqui as chaves que você quer testar
+            // Se deixar vazio, o programa pede para digitar
             string[] chavasParaTeste = new[]
             {
-                "26079011244672075000194260000000015026094979232135"
+                "26079011244672075000194260000000015026094979232135" // Substitua por chave real
             };
             // ===== FIM CONFIGURAÇÕES =====
 
@@ -48,6 +48,7 @@ namespace NFSeDownloader
             {
                 var downloader = new SefinDownloader(BaseUrl, CertPath, CertPassword);
 
+                // Se não houver chaves configuradas, pede para digitar
                 if (chavasParaTeste.Length == 0 || string.IsNullOrWhiteSpace(chavasParaTeste[0]))
                 {
                     chavasParaTeste = await SolicitarChavasDoUsuario();
@@ -169,6 +170,7 @@ namespace NFSeDownloader
 
             var apenasDigitos = new string(System.Linq.Enumerable.Where(chave, char.IsDigit).ToArray());
             
+            // Aceita tanto 44 dígitos (chave NFe/NFSe padrão) quanto 50 dígitos (formato estendido)
             return apenasDigitos.Length == 44 || apenasDigitos.Length == 50;
         }
 
@@ -230,13 +232,13 @@ namespace NFSeDownloader
 
                 X509Certificate2 cert = null;
 
-                // Tentar carregar certificado
+                // Carregar certificado
                 if (File.Exists(certPath))
                 {
                     cert = new X509Certificate2(
                         certPath,
                         certPassword,
-                        X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet);
+                        X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
 
                     Console.WriteLine($"✅ Certificado carregado: {cert.Subject}");
                     Console.WriteLine($"   Válido de: {cert.NotBefore:dd/MM/yyyy}");
@@ -258,10 +260,9 @@ namespace NFSeDownloader
                 }
 
                 // Desabilitar validação de certificado SSL (apenas para testes)
-                // ⚠️ NUNCA use isso em produção!
                 handler.ServerCertificateCustomValidationCallback = (message, cert2, chain, errors) =>
                 {
-                    if (errors == System.Net.Security.SslPolicyErrors.None)
+                    if (errors == SslPolicyErrors.None)
                         return true;
 
                     Console.WriteLine($"⚠️  Aviso SSL: {errors}");
@@ -336,6 +337,7 @@ namespace NFSeDownloader
                 // Validar se é XML
                 if (body.TrimStart().StartsWith("<"))
                 {
+                    // Tentar fazer parse para garantir que é XML válido
                     try
                     {
                         var doc = new XmlDocument();
@@ -346,7 +348,7 @@ namespace NFSeDownloader
                     catch (XmlException ex)
                     {
                         Console.WriteLine($"   ⚠️  XML não bem formado: {ex.Message}");
-                        return body;
+                        return body; // Ainda assim retorna para o usuário verificar
                     }
                 }
 
@@ -358,6 +360,7 @@ namespace NFSeDownloader
                         using var doc = JsonDocument.Parse(body);
                         var root = doc.RootElement;
 
+                        // Procura por campo que contenha XML
                         foreach (var prop in root.EnumerateObject())
                         {
                             var valor = prop.Value.GetString();
@@ -379,7 +382,7 @@ namespace NFSeDownloader
                 }
 
                 // Retorno desconhecido
-                Console.WriteLine($"   ⚠️  Formato desconhecido");
+                Console.WriteLine($"   ⚠️  Formato desconhecido (não é XML nem JSON)");
                 return body;
             }
             catch (HttpRequestException ex)
