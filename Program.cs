@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
@@ -24,16 +25,16 @@ namespace NFSeDownloader
             Console.WriteLine("╚════════════════════════════════════════════════════════╝\n");
 
             // ===== CONFIGURAÇÕES =====
-            const string BaseUrl = "http://sefin.nfse.gov.br/SefinNacional";
+            // IMPORTANTE: Use HTTPS em vez de HTTP
+            const string BaseUrl = "https://sefin.nfse.gov.br/SefinNacional";
             const string CertPath = @"C:\certificados\certificado.pfx";
             const string CertPassword = "sua_senha";
             const string OutputFolder = @".\NFSe_Downloads";
             
-            // Exemplo: coloque aqui as chaves que você quer testar
-            // Aceita tanto chaves de 44 dígitos quanto de 50 dígitos
+            // Chave para teste
             string[] chavasParaTeste = new[]
             {
-                "26079011244672075000194260000000015026094979232135" // 50 dígitos
+                "26079011244672075000194260000000015026094979232135"
             };
             // ===== FIM CONFIGURAÇÕES =====
 
@@ -41,12 +42,12 @@ namespace NFSeDownloader
                 Directory.CreateDirectory(OutputFolder);
 
             Console.WriteLine($"📁 Pasta de saída: {Path.GetFullPath(OutputFolder)}\n");
+            Console.WriteLine($"🔐 Usando HTTPS (porta 443)\n");
 
             try
             {
                 var downloader = new SefinDownloader(BaseUrl, CertPath, CertPassword);
 
-                // Se não houver chaves configuradas, pede para digitar
                 if (chavasParaTeste.Length == 0 || string.IsNullOrWhiteSpace(chavasParaTeste[0]))
                 {
                     chavasParaTeste = await SolicitarChavasDoUsuario();
@@ -168,7 +169,6 @@ namespace NFSeDownloader
 
             var apenasDigitos = new string(System.Linq.Enumerable.Where(chave, char.IsDigit).ToArray());
             
-            // Aceita tanto 44 dígitos (chave NFe/NFSe padrão) quanto 50 dígitos (formato estendido)
             return apenasDigitos.Length == 44 || apenasDigitos.Length == 50;
         }
 
@@ -226,22 +226,52 @@ namespace NFSeDownloader
 
             try
             {
-                var cert = new X509Certificate2(
-                    certPath,
-                    certPassword,
-                    X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
+                Console.WriteLine("⚙️  Configurando cliente HTTPS com certificado digital...\n");
 
-                var handler = new HttpClientHandler
+                X509Certificate2 cert = null;
+
+                // Tentar carregar certificado
+                if (File.Exists(certPath))
                 {
-                    ClientCertificateOptions = ClientCertificateOption.Manual,
-                    ServerCertificateCustomValidationCallback = (message, cert2, chain, errors) => true
+                    cert = new X509Certificate2(
+                        certPath,
+                        certPassword,
+                        X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet);
+
+                    Console.WriteLine($"✅ Certificado carregado: {cert.Subject}");
+                    Console.WriteLine($"   Válido de: {cert.NotBefore:dd/MM/yyyy}");
+                    Console.WriteLine($"   Válido até: {cert.NotAfter:dd/MM/yyyy}\n");
+                }
+                else
+                {
+                    Console.WriteLine($"⚠️  AVISO: Certificado não encontrado em {certPath}");
+                    Console.WriteLine("   Continuando sem certificado (pode falhar se a API exigir)...\n");
+                }
+
+                // Configurar handler HTTP
+                var handler = new HttpClientHandler();
+
+                if (cert != null)
+                {
+                    handler.ClientCertificateOptions = ClientCertificateOption.Manual;
+                    handler.ClientCertificates.Add(cert);
+                }
+
+                // Desabilitar validação de certificado SSL (apenas para testes)
+                // ⚠️ NUNCA use isso em produção!
+                handler.ServerCertificateCustomValidationCallback = (message, cert2, chain, errors) =>
+                {
+                    if (errors == System.Net.Security.SslPolicyErrors.None)
+                        return true;
+
+                    Console.WriteLine($"⚠️  Aviso SSL: {errors}");
+                    return true; // Aceitar mesmo assim (apenas para testes)
                 };
 
-                handler.ClientCertificates.Add(cert);
-
+                // Configurar timeout e outras opções
                 _httpClient = new HttpClient(handler)
                 {
-                    Timeout = TimeSpan.FromSeconds(30)
+                    Timeout = TimeSpan.FromSeconds(60)
                 };
 
                 _httpClient.DefaultRequestHeaders.Add("User-Agent", "NFSeDownloader/1.0");
@@ -252,16 +282,14 @@ namespace NFSeDownloader
                     new MediaTypeWithQualityHeaderValue("text/xml"));
                 _httpClient.DefaultRequestHeaders.Accept.Add(
                     new MediaTypeWithQualityHeaderValue("application/json"));
+                _httpClient.DefaultRequestHeaders.Accept.Add(
+                    new MediaTypeWithQualityHeaderValue("*/*"));
 
-                Console.WriteLine("✅ Certificado digital carregado com sucesso\n");
-            }
-            catch (FileNotFoundException)
-            {
-                throw new Exception($"Certificado não encontrado: {certPath}");
+                Console.WriteLine("✅ Cliente HTTP configurado com sucesso\n");
             }
             catch (Exception ex)
             {
-                throw new Exception($"Erro ao carregar certificado: {ex.Message}", ex);
+                throw new Exception($"Erro ao configurar cliente: {ex.Message}", ex);
             }
         }
 
@@ -276,7 +304,12 @@ namespace NFSeDownloader
 
             try
             {
-                using var response = await _httpClient.GetAsync(url);
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8");
+
+                Console.WriteLine($"   ⏳ Aguardando resposta...");
+
+                using var response = await _httpClient.SendAsync(request);
 
                 var body = await response.Content.ReadAsStringAsync();
 
@@ -284,8 +317,11 @@ namespace NFSeDownloader
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    if (!string.IsNullOrWhiteSpace(body) && body.Length < 200)
-                        Console.WriteLine($"   Resposta: {body}");
+                    if (!string.IsNullOrWhiteSpace(body))
+                    {
+                        var preview = body.Length > 500 ? body.Substring(0, 500) + "..." : body;
+                        Console.WriteLine($"   Resposta: {preview}");
+                    }
                     return string.Empty;
                 }
 
@@ -295,21 +331,22 @@ namespace NFSeDownloader
                     return string.Empty;
                 }
 
+                Console.WriteLine($"   📦 Tamanho da resposta: {body.Length} bytes");
+
                 // Validar se é XML
                 if (body.TrimStart().StartsWith("<"))
                 {
-                    // Tentar fazer parse para garantir que é XML válido
                     try
                     {
                         var doc = new XmlDocument();
                         doc.LoadXml(body);
-                        Console.WriteLine($"   ✅ XML válido");
+                        Console.WriteLine($"   ✅ XML válido e bem formado");
                         return body;
                     }
                     catch (XmlException ex)
                     {
-                        Console.WriteLine($"   ⚠️  XML inválido: {ex.Message}");
-                        return body; // Ainda assim retorna para o usuário verificar
+                        Console.WriteLine($"   ⚠️  XML não bem formado: {ex.Message}");
+                        return body;
                     }
                 }
 
@@ -321,7 +358,6 @@ namespace NFSeDownloader
                         using var doc = JsonDocument.Parse(body);
                         var root = doc.RootElement;
 
-                        // Procura por campo que contenha XML
                         foreach (var prop in root.EnumerateObject())
                         {
                             var valor = prop.Value.GetString();
@@ -343,22 +379,26 @@ namespace NFSeDownloader
                 }
 
                 // Retorno desconhecido
-                Console.WriteLine($"   ⚠️  Formato desconhecido (não é XML nem JSON)");
+                Console.WriteLine($"   ⚠️  Formato desconhecido");
                 return body;
             }
             catch (HttpRequestException ex)
             {
-                Console.WriteLine($"   ❌ Erro de conexão: {ex.Message}");
+                Console.WriteLine($"   ❌ Erro de conexão HTTP:");
+                Console.WriteLine($"      {ex.Message}");
+                if (ex.InnerException != null)
+                    Console.WriteLine($"      Causa: {ex.InnerException.Message}");
                 return string.Empty;
             }
             catch (TaskCanceledException)
             {
-                Console.WriteLine($"   ❌ Timeout na requisição");
+                Console.WriteLine($"   ❌ Timeout na requisição (60 segundos)");
                 return string.Empty;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"   ❌ Erro inesperado: {ex.Message}");
+                Console.WriteLine($"   ❌ Erro inesperado: {ex.GetType().Name}");
+                Console.WriteLine($"      {ex.Message}");
                 return string.Empty;
             }
         }
