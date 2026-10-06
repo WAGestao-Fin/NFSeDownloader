@@ -30,11 +30,10 @@ namespace NFSeDownloader
             const string OutputFolder = @".\NFSe_Downloads";
             
             // Exemplo: coloque aqui as chaves que você quer testar
-            // Se deixar vazio, o programa pede para digitar
+            // Aceita tanto chaves de 44 dígitos quanto de 50 dígitos
             string[] chavasParaTeste = new[]
             {
-                "12345678901234567890123456789012345678901234567890", // Substitua por chave real
-                // "87654321098765432109876543210987654321098765432109"  // Adicione mais conforme necessário
+                "26079011244672075000194260000000015026094979232135" // 50 dígitos
             };
             // ===== FIM CONFIGURAÇÕES =====
 
@@ -73,7 +72,7 @@ namespace NFSeDownloader
 
                     if (!ValidarChaveAcesso(chave))
                     {
-                        Console.WriteLine($"   ❌ Formato inválido (deve ter 44 dígitos)\n");
+                        Console.WriteLine($"   ❌ Formato inválido (deve ter 44 ou 50 dígitos)\n");
                         falha++;
                         continue;
                     }
@@ -140,7 +139,7 @@ namespace NFSeDownloader
         static async Task<string[]> SolicitarChavasDoUsuario()
         {
             Console.WriteLine("📝 Nenhuma chave configurada. Digite as chaves para testar:\n");
-            Console.WriteLine("(Cada chave deve ter 44 dígitos numéricos)");
+            Console.WriteLine("(Cada chave deve ter 44 ou 50 dígitos numéricos)");
             Console.WriteLine("(Digite 'sair' quando terminar)\n");
 
             var chaves = new List<string>();
@@ -168,7 +167,9 @@ namespace NFSeDownloader
                 return false;
 
             var apenasDigitos = new string(System.Linq.Enumerable.Where(chave, char.IsDigit).ToArray());
-            return apenasDigitos.Length == 44;
+            
+            // Aceita tanto 44 dígitos (chave NFe/NFSe padrão) quanto 50 dígitos (formato estendido)
+            return apenasDigitos.Length == 44 || apenasDigitos.Length == 50;
         }
 
         static async Task CriarZipComArquivos(string pastaBase, List<string> arquivos)
@@ -178,7 +179,7 @@ namespace NFSeDownloader
                 var nomeZip = $"NFSe_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
                 var caminhoZip = Path.Combine(pastaBase, nomeZip);
 
-                Console.WriteLine($"\n📦 Criando arquivo ZIP: {nomeZip}");
+                Console.WriteLine($"📦 Criando arquivo ZIP: {nomeZip}");
 
                 using (var zip = ZipFile.Open(caminhoZip, ZipArchiveMode.Create))
                 {
